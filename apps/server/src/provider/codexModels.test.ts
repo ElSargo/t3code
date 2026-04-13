@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { parseCodexModelListResult } from "./codexModels";
+import { parseCodexModelListResult, readObject } from "./codexModels";
+
+describe("readObject", () => {
+  it("rejects arrays", () => {
+    expect(readObject([])).toBeUndefined();
+  });
+});
 
 describe("parseCodexModelListResult", () => {
   it("keeps built-in display names for known models", () => {
