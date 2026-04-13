@@ -1,7 +1,8 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
-import type { ServerProviderSkill } from "@t3tools/contracts";
+import type { ServerProviderModel, ServerProviderSkill } from "@t3tools/contracts";
 import { readCodexAccountSnapshot, type CodexAccountSnapshot } from "./codexAccount";
+import { nonEmptyTrimmed, parseCodexModelListResult, readArray, readObject } from "./codexModels";
 
 interface JsonRpcProbeResponse {
   readonly id?: unknown;
@@ -14,27 +15,23 @@ interface JsonRpcProbeResponse {
 export interface CodexDiscoverySnapshot {
   readonly account: CodexAccountSnapshot;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
+  readonly models: ReadonlyArray<ServerProviderModel>;
+}
+
+export function buildCodexDiscoverySnapshot(input: {
+  readonly account: CodexAccountSnapshot;
+  readonly skills: ReadonlyArray<ServerProviderSkill>;
+  readonly models?: ReadonlyArray<ServerProviderModel>;
+}): CodexDiscoverySnapshot {
+  return {
+    account: input.account,
+    skills: input.skills,
+    models: input.models ?? [],
+  };
 }
 
 function readErrorMessage(response: JsonRpcProbeResponse): string | undefined {
   return typeof response.error?.message === "string" ? response.error.message : undefined;
-}
-
-function readObject(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
-function readArray(value: unknown): ReadonlyArray<unknown> | undefined {
-  return Array.isArray(value) ? value : undefined;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function nonEmptyTrimmed(value: unknown): string | undefined {
-  const candidate = readString(value)?.trim();
-  return candidate ? candidate : undefined;
 }
 
 function parseCodexSkillsResult(result: unknown, cwd: string): ReadonlyArray<ServerProviderSkill> {
@@ -125,6 +122,7 @@ export async function probeCodexDiscovery(input: {
     let completed = false;
     let account: CodexAccountSnapshot | undefined;
     let skills: ReadonlyArray<ServerProviderSkill> | undefined;
+    let models: ReadonlyArray<ServerProviderModel> | undefined;
 
     const cleanup = () => {
       output.removeAllListeners();
@@ -152,10 +150,19 @@ export async function probeCodexDiscovery(input: {
       );
 
     const maybeResolve = () => {
-      if (account && skills !== undefined) {
+      if (account && skills !== undefined && models !== undefined) {
         const resolvedAccount = account;
         const resolvedSkills = skills;
-        finish(() => resolve({ account: resolvedAccount, skills: resolvedSkills }));
+        const resolvedModels = models;
+        finish(() =>
+          resolve(
+            buildCodexDiscoverySnapshot({
+              account: resolvedAccount,
+              skills: resolvedSkills,
+              ...(resolvedModels !== undefined ? { models: resolvedModels } : {}),
+            }),
+          ),
+        );
       }
     };
 
@@ -200,6 +207,7 @@ export async function probeCodexDiscovery(input: {
         writeMessage({ method: "initialized" });
         writeMessage({ id: 2, method: "skills/list", params: { cwds: [input.cwd] } });
         writeMessage({ id: 3, method: "account/read", params: {} });
+        writeMessage({ id: 4, method: "model/list", params: {} });
         return;
       }
 
@@ -218,6 +226,13 @@ export async function probeCodexDiscovery(input: {
         }
 
         account = readCodexAccountSnapshot(response.result);
+        maybeResolve();
+        return;
+      }
+
+      if (response.id === 4) {
+        const errorMessage = readErrorMessage(response);
+        models = errorMessage ? [] : parseCodexModelListResult(response.result);
         maybeResolve();
       }
     });

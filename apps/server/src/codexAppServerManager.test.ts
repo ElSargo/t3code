@@ -310,6 +310,20 @@ describe("readCodexAccountSnapshot", () => {
     });
   });
 
+  it("keeps spark enabled for chatgpt pro lite accounts", () => {
+    expect(
+      readCodexAccountSnapshot({
+        type: "chatgpt",
+        email: "prolite@example.com",
+        planType: "prolite",
+      }),
+    ).toEqual({
+      type: "chatgpt",
+      planType: "prolite",
+      sparkEnabled: true,
+    });
+  });
+
   it("disables spark for api key accounts", () => {
     expect(
       readCodexAccountSnapshot({
@@ -357,6 +371,48 @@ describe("resolveCodexModelForAccount", () => {
     ).toBe("gpt-5.3-codex-spark");
   });
 
+  it("keeps spark when the app-server reports it for an unknown chatgpt plan", () => {
+    expect(
+      resolveCodexModelForAccount(
+        "gpt-5.3-codex-spark",
+        {
+          type: "chatgpt",
+          planType: "unknown",
+          sparkEnabled: false,
+        },
+        new Set(["gpt-5.3-codex", "gpt-5.3-codex-spark"]),
+      ),
+    ).toBe("gpt-5.3-codex-spark");
+  });
+
+  it("falls back from spark to default when the app-server model set is empty", () => {
+    expect(
+      resolveCodexModelForAccount(
+        "gpt-5.3-codex-spark",
+        {
+          type: "chatgpt",
+          planType: "unknown",
+          sparkEnabled: false,
+        },
+        new Set(),
+      ),
+    ).toBe("gpt-5.3-codex");
+  });
+
+  it("falls back to a reported available model when spark and the default model are both unavailable", () => {
+    expect(
+      resolveCodexModelForAccount(
+        "gpt-5.3-codex-spark",
+        {
+          type: "chatgpt",
+          planType: "unknown",
+          sparkEnabled: false,
+        },
+        new Set(["gpt-5.4"]),
+      ),
+    ).toBe("gpt-5.4");
+  });
+
   it("falls back from spark to default for api key auth", () => {
     expect(
       resolveCodexModelForAccount("gpt-5.3-codex-spark", {
@@ -365,6 +421,77 @@ describe("resolveCodexModelForAccount", () => {
         sparkEnabled: false,
       }),
     ).toBe("gpt-5.3-codex");
+  });
+
+  it("keeps configured custom models even when the app-server reports a different model list", () => {
+    expect(
+      resolveCodexModelForAccount(
+        "gpt-6.7-codex-ultra-preview",
+        {
+          type: "chatgpt",
+          planType: "unknown",
+          sparkEnabled: false,
+        },
+        new Set(["gpt-5.4"]),
+        new Set(["gpt-6.7-codex-ultra-preview"]),
+      ),
+    ).toBe("gpt-6.7-codex-ultra-preview");
+  });
+});
+
+describe("sendTurn custom models", () => {
+  it("preserves configured custom model selections when reported models are non-empty", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+    (context.session as { model?: string | null }).model = "gpt-6.7-codex-ultra-preview";
+    (
+      context as {
+        account: {
+          type: "apiKey" | "chatgpt" | "unknown";
+          planType:
+            | "free"
+            | "go"
+            | "plus"
+            | "pro"
+            | "prolite"
+            | "team"
+            | "business"
+            | "enterprise"
+            | "edu"
+            | "unknown"
+            | null;
+          sparkEnabled: boolean;
+        };
+      }
+    ).account = {
+      type: "chatgpt",
+      planType: "unknown",
+      sparkEnabled: false,
+    };
+    (
+      context as {
+        availableModels?: ReadonlySet<string>;
+        customModels?: ReadonlySet<string>;
+      }
+    ).availableModels = new Set(["gpt-5.4"]);
+    (
+      context as {
+        availableModels?: ReadonlySet<string>;
+        customModels?: ReadonlySet<string>;
+      }
+    ).customModels = new Set(["gpt-6.7-codex-ultra-preview"]);
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "hello",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(
+      context,
+      "turn/start",
+      expect.objectContaining({
+        model: "gpt-6.7-codex-ultra-preview",
+      }),
+    );
   });
 });
 

@@ -204,8 +204,55 @@ validationLayer("CodexAdapterLive validation", (it) => {
         provider: "codex",
         threadId: asThreadId("thread-1"),
         binaryPath: "codex",
+        customModels: [],
         model: "gpt-5.3-codex",
         serviceTier: "fast",
+        runtimeMode: "full-access",
+      });
+    }),
+  );
+});
+
+const customModelManager = new FakeCodexManager();
+const customModelLayer = it.layer(
+  makeCodexAdapterLive({ manager: customModelManager }).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(
+      ServerSettingsService.layerTest({
+        providers: {
+          codex: {
+            customModels: ["gpt-6.7-codex-ultra-preview"],
+          },
+        },
+      }),
+    ),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+customModelLayer("CodexAdapterLive custom models", (it) => {
+  it.effect("passes configured codex custom models through to the manager", () =>
+    Effect.gen(function* () {
+      customModelManager.startSessionImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      yield* adapter.startSession({
+        provider: "codex",
+        threadId: asThreadId("thread-custom"),
+        runtimeMode: "full-access",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-6.7-codex-ultra-preview",
+        },
+      });
+
+      assert.deepStrictEqual(customModelManager.startSessionImpl.mock.calls[0]?.[0], {
+        provider: "codex",
+        threadId: asThreadId("thread-custom"),
+        binaryPath: "codex",
+        customModels: ["gpt-6.7-codex-ultra-preview"],
+        model: "gpt-6.7-codex-ultra-preview",
         runtimeMode: "full-access",
       });
     }),
