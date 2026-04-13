@@ -32,6 +32,7 @@ import {
   type CodexAccountSnapshot,
 } from "./provider/codexAccount";
 import { buildCodexInitializeParams, killCodexChildProcess } from "./provider/codexAppServer";
+import { parseCodexModelListResult } from "./provider/codexModels";
 
 export { buildCodexInitializeParams } from "./provider/codexAppServer";
 export { readCodexAccountSnapshot, resolveCodexModelForAccount } from "./provider/codexAccount";
@@ -73,6 +74,8 @@ interface CodexUserInputAnswer {
 interface CodexSessionContext {
   session: ProviderSession;
   account: CodexAccountSnapshot;
+  availableModels?: ReadonlySet<string>;
+  customModels?: ReadonlySet<string>;
   child: ChildProcessWithoutNullStreams;
   output: readline.Interface;
   pending: Map<PendingRequestKey, PendingRequest>;
@@ -124,6 +127,7 @@ export interface CodexAppServerStartSessionInput {
   readonly resumeCursor?: unknown;
   readonly binaryPath: string;
   readonly homePath?: string;
+  readonly customModels?: ReadonlyArray<string>;
   readonly runtimeMode: RuntimeMode;
 }
 
@@ -135,6 +139,21 @@ export interface CodexThreadTurnSnapshot {
 export interface CodexThreadSnapshot {
   threadId: string;
   turns: CodexThreadTurnSnapshot[];
+}
+
+function normalizeConfiguredCustomModels(
+  customModels: ReadonlyArray<string> | undefined,
+): ReadonlySet<string> | undefined {
+  const normalized = new Set<string>();
+
+  for (const candidate of customModels ?? []) {
+    const slug = normalizeModelSlug(candidate, "codex");
+    if (slug) {
+      normalized.add(slug);
+    }
+  }
+
+  return normalized.size > 0 ? normalized : undefined;
 }
 
 const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
@@ -480,6 +499,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         shell: process.platform === "win32",
       });
       const output = readline.createInterface({ input: child.stdout });
+      const customModels = normalizeConfiguredCustomModels(input.customModels);
 
       context = {
         session,
@@ -488,6 +508,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           planType: null,
           sparkEnabled: true,
         },
+        ...(customModels ? { customModels } : {}),
         child,
         output,
         pending: new Map(),
@@ -509,6 +530,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       try {
         const modelListResponse = await this.sendRequest(context, "model/list", {});
         console.log("codex model/list response", modelListResponse);
+        const availableModels = parseCodexModelListResult(modelListResponse).map(
+          (model) => model.slug,
+        );
+        if (availableModels.length > 0) {
+          context.availableModels = new Set(availableModels);
+        }
       } catch (error) {
         console.log("codex model/list failed", error);
       }
@@ -528,6 +555,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const normalizedModel = resolveCodexModelForAccount(
         normalizeCodexModelSlug(input.model),
         context.account,
+        context.availableModels,
+        context.customModels,
       );
       const sessionOverrides = {
         model: normalizedModel ?? null,
@@ -710,6 +739,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const normalizedModel = resolveCodexModelForAccount(
       normalizeCodexModelSlug(input.model ?? context.session.model),
       context.account,
+      context.availableModels,
+      context.customModels,
     );
     if (normalizedModel) {
       turnStartParams.model = normalizedModel;

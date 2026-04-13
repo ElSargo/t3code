@@ -5,6 +5,7 @@ export type CodexPlanType =
   | "go"
   | "plus"
   | "pro"
+  | "prolite"
   | "team"
   | "business"
   | "enterprise"
@@ -19,7 +20,7 @@ export interface CodexAccountSnapshot {
 
 export const CODEX_DEFAULT_MODEL = "gpt-5.3-codex";
 export const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
-const CODEX_SPARK_ENABLED_PLAN_TYPES = new Set<CodexPlanType>(["pro"]);
+const CODEX_SPARK_ENABLED_PLAN_TYPES = new Set<CodexPlanType>(["pro", "prolite"]);
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") {
@@ -87,6 +88,8 @@ export function codexAuthSubLabel(account: CodexAccountSnapshot | undefined): st
       return "ChatGPT Plus Subscription";
     case "pro":
       return "ChatGPT Pro Subscription";
+    case "prolite":
+      return "ChatGPT Pro Lite Subscription";
     case "team":
       return "ChatGPT Team Subscription";
     case "business":
@@ -114,7 +117,31 @@ export function adjustCodexModelsForAccount(
 export function resolveCodexModelForAccount(
   model: string | undefined,
   account: CodexAccountSnapshot,
+  availableModels?: ReadonlySet<string>,
+  customModels?: ReadonlySet<string>,
 ): string | undefined {
+  const hasTrustedAvailableModels = (availableModels?.size ?? 0) > 0;
+
+  if (!model) {
+    return model;
+  }
+
+  if (customModels?.has(model)) {
+    return model;
+  }
+
+  if (hasTrustedAvailableModels) {
+    if (availableModels?.has(model)) {
+      return model;
+    }
+
+    if (availableModels?.has(CODEX_DEFAULT_MODEL)) {
+      return CODEX_DEFAULT_MODEL;
+    }
+
+    return availableModels?.values().next().value;
+  }
+
   if (model !== CODEX_SPARK_MODEL || account.sparkEnabled) {
     return model;
   }
