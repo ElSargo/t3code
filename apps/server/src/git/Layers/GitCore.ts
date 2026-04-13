@@ -37,6 +37,7 @@ import {
   parseRemoteRefWithRemoteNames,
 } from "../remoteRefs.ts";
 import { ServerConfig } from "../../config.ts";
+import { deprioritizeChildProcess } from "../../os-jank.ts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -695,6 +696,7 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
             }),
           )
           .pipe(Effect.mapError(toGitCommandError(commandInput, "failed to spawn.")));
+        deprioritizeChildProcess(Number(child.pid));
 
         const [stdout, stderr, exitCode] = yield* Effect.all(
           [

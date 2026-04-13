@@ -1,6 +1,15 @@
 import * as OS from "node:os";
+import { spawnSync } from "node:child_process";
 import { Effect, Path } from "effect";
 import { readPathFromLoginShell, resolveLoginShell } from "@t3tools/shared/shell";
+
+const CHILD_PROCESS_PRIORITY = OS.constants.priority.PRIORITY_LOW;
+
+interface DeprioritizeChildProcessOptions {
+  setPriority?: typeof OS.setPriority;
+  spawnSync?: typeof spawnSync;
+  platform?: NodeJS.Platform;
+}
 
 export function fixPath(
   options: {
@@ -23,6 +32,37 @@ export function fixPath(
     }
   } catch {
     // Silently ignore — keep default PATH
+  }
+}
+
+export function deprioritizeChildProcess(
+  pid: number | undefined | null,
+  options: DeprioritizeChildProcessOptions = {},
+): void {
+  const numericPid = typeof pid === "number" ? pid : Number.NaN;
+  if (!Number.isInteger(numericPid) || numericPid <= 0) {
+    return;
+  }
+
+  const platform = options.platform ?? process.platform;
+  const setPriority = options.setPriority ?? OS.setPriority;
+
+  try {
+    setPriority(numericPid, CHILD_PROCESS_PRIORITY);
+  } catch {
+    // Ignore priority failures and keep the child running normally.
+  }
+
+  if (platform !== "linux") {
+    return;
+  }
+
+  try {
+    (options.spawnSync ?? spawnSync)("ionice", ["-c", "3", "-p", String(numericPid)], {
+      stdio: "ignore",
+    });
+  } catch {
+    // `ionice` is optional; ignore when unavailable or unsupported.
   }
 }
 

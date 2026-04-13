@@ -67,6 +67,12 @@ import {
   reduceDesktopUpdateStateOnUpdateAvailable,
 } from "./updateMachine";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
+import {
+  applyDesktopNavigationTarget,
+  findDesktopNavigationTargetInArgv,
+  parseDesktopNavigationTarget,
+  type DesktopNavigationTarget,
+} from "./deepLink";
 
 syncShellEnvironment();
 
@@ -145,6 +151,7 @@ let restoreStdIoCapture: (() => void) | null = null;
 let backendObservabilitySettings = readPersistedBackendObservabilitySettings();
 let desktopSettings = readDesktopSettings(DESKTOP_SETTINGS_PATH);
 let desktopServerExposureMode: DesktopServerExposureMode = desktopSettings.serverExposureMode;
+let pendingNavigationTarget = findDesktopNavigationTargetInArgv(process.argv, DESKTOP_SCHEME);
 
 let destructiveMenuIconCache: Electron.NativeImage | null | undefined;
 const expectedBackendExitChildren = new WeakSet<ChildProcess.ChildProcess>();
@@ -930,6 +937,62 @@ function configureAppIdentity(): void {
   }
 }
 
+function consumePendingNavigationTarget(): DesktopNavigationTarget | null {
+  const target = pendingNavigationTarget;
+  pendingNavigationTarget = null;
+  return target;
+}
+
+function resolveDesktopWindowBaseUrl(): string {
+  if (backendHttpUrl) {
+    return backendHttpUrl;
+  }
+
+  return `${DESKTOP_SCHEME}://app`;
+}
+
+function resolveDesktopWindowUrl(target?: DesktopNavigationTarget | null): string {
+  return applyDesktopNavigationTarget(resolveDesktopWindowBaseUrl(), target ?? null);
+}
+
+function navigateToDesktopTarget(target: DesktopNavigationTarget): void {
+  const existingWindow = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null;
+  if (!existingWindow) {
+    pendingNavigationTarget = target;
+    if (app.isReady()) {
+      mainWindow = createWindow();
+    }
+    return;
+  }
+
+  const nextUrl = applyDesktopNavigationTarget(
+    isDevelopment ? resolveDesktopDevServerUrl() : resolveDesktopWindowBaseUrl(),
+    target,
+  );
+
+  pendingNavigationTarget = null;
+
+  if (existingWindow.webContents.getURL() !== nextUrl) {
+    void existingWindow.loadURL(nextUrl).catch((error) => {
+      console.error("[desktop] failed to navigate to deep link", error);
+    });
+  }
+
+  revealWindow(existingWindow);
+}
+
+function focusOrCreateMainWindow(): void {
+  const existingWindow = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null;
+  if (existingWindow) {
+    revealWindow(existingWindow);
+    return;
+  }
+
+  if (app.isReady()) {
+    mainWindow = createWindow();
+  }
+}
+
 function clearUpdatePollTimer(): void {
   if (updateStartupTimer) {
     clearTimeout(updateStartupTimer);
@@ -1650,6 +1713,7 @@ function getInitialWindowBackgroundColor(): string {
 }
 
 function createWindow(): BrowserWindow {
+  const initialNavigationTarget = consumePendingNavigationTarget();
   const window = new BrowserWindow({
     width: 1100,
     height: 780,
@@ -1737,13 +1801,15 @@ function createWindow(): BrowserWindow {
   }
 
   if (isDevelopment) {
-    void window.loadURL(resolveDesktopDevServerUrl());
+    void window.loadURL(
+      applyDesktopNavigationTarget(resolveDesktopDevServerUrl(), initialNavigationTarget),
+    );
     window.webContents.openDevTools({ mode: "detach" });
     setImmediate(() => {
       revealWindow(window);
     });
   } else {
-    void window.loadURL(resolveDesktopWindowUrl());
+    void window.loadURL(resolveDesktopWindowUrl(initialNavigationTarget));
   }
 
   window.on("closed", () => {
@@ -1755,20 +1821,42 @@ function createWindow(): BrowserWindow {
   return window;
 }
 
-function resolveDesktopWindowUrl(): string {
-  if (backendHttpUrl) {
-    return backendHttpUrl;
-  }
-
-  return `${DESKTOP_SCHEME}://app`;
-}
-
 // Override Electron's userData path before the `ready` event so that
 // Chromium session data uses a filesystem-friendly directory name.
 // Must be called synchronously at the top level — before `app.whenReady()`.
 app.setPath("userData", resolveUserDataPath());
 
 configureAppIdentity();
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+}
+
+app.on("second-instance", (_event, commandLine) => {
+  const target = findDesktopNavigationTargetInArgv(commandLine, DESKTOP_SCHEME);
+  if (target) {
+    navigateToDesktopTarget(target);
+    return;
+  }
+
+  focusOrCreateMainWindow();
+});
+
+app.on("open-url", (event, rawUrl) => {
+  event.preventDefault();
+  const target = parseDesktopNavigationTarget(rawUrl, DESKTOP_SCHEME);
+  if (!target) {
+    return;
+  }
+
+  if (!app.isReady()) {
+    pendingNavigationTarget = target;
+    return;
+  }
+
+  navigateToDesktopTarget(target);
+});
 
 async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap start");
@@ -1868,12 +1956,7 @@ app
     });
 
     app.on("activate", () => {
-      const existingWindow = mainWindow ?? BrowserWindow.getAllWindows()[0];
-      if (existingWindow) {
-        revealWindow(existingWindow);
-        return;
-      }
-      mainWindow = createWindow();
+      focusOrCreateMainWindow();
     });
   })
   .catch((error) => {

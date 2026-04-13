@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 
 import { Effect, FileSystem, Layer, Path } from "effect";
+import { deprioritizeChildProcess } from "../../os-jank";
 import { PtyAdapter, PtyAdapterShape, PtyExitEvent, PtyProcess } from "../Services/PTY";
 
 let didEnsureSpawnHelperExecutable = false;
@@ -110,6 +111,7 @@ export const layer = Layer.effect(
           env: input.env,
           name: globalThis.process.platform === "win32" ? "xterm-color" : "xterm-256color",
         });
+        deprioritizeChildProcess(ptyProcess.pid);
         return new NodePtyProcess(ptyProcess);
       }),
     } satisfies PtyAdapterShape;

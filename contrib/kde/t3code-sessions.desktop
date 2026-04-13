@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Service
+Icon=t3code
+Name=T3 Code Sessions
+Comment=Search recent T3 Code threads and switch to them
+X-KDE-ServiceTypes=Plasma/Runner
+X-KDE-PluginInfo-Author=T3 Tools
+X-KDE-PluginInfo-Email=opensource@t3.tools
+X-KDE-PluginInfo-Name=t3code-sessions
+X-KDE-PluginInfo-Version=1.0
+X-KDE-PluginInfo-License=MIT
+X-KDE-PluginInfo-EnabledByDefault=true
+X-Plasma-API=DBus
+X-Plasma-DBusRunner-Service=org.t3tools.T3Code.Runner
+X-Plasma-DBusRunner-Path=/SessionsRunner
+X-Plasma-Request-Actions-Once=true
+X-Plasma-Runner-Syntaxes=:q:,t3 :q:,thread :q:,session :q:
+X-Plasma-Runner-Syntax-Descriptions=Find recent T3 Code threads whose title or project match :q:,Find recent T3 Code threads whose title or project match :q:,Find recent T3 Code threads whose title or project match :q:,Find recent T3 Code threads whose title or project match :q:

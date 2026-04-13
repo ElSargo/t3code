@@ -30,6 +30,7 @@ import {
   toJsonSchemaObject,
 } from "../Utils.ts";
 import { normalizeClaudeModelOptionsWithCapabilities } from "@t3tools/shared/model";
+import { deprioritizeChildProcess } from "../../os-jank.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { getClaudeModelCapabilities } from "../../provider/Layers/ClaudeProvider.ts";
 
@@ -131,6 +132,7 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
             normalizeCliError("claude", operation, cause, "Failed to spawn Claude CLI process"),
           ),
         );
+      deprioritizeChildProcess(Number(child.pid));
 
       const [stdout, stderr, exitCode] = yield* Effect.all(
         [

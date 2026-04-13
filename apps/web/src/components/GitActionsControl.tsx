@@ -7,9 +7,16 @@ import type {
 } from "@t3tools/contracts";
 import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
-import { ChevronDownIcon, CloudUploadIcon, GitCommitIcon, InfoIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  CloudUploadIcon,
+  GitCommitIcon,
+  GitMergeIcon,
+  InfoIcon,
+} from "lucide-react";
 import { GitHubIcon } from "./Icons";
 import {
+  buildAutoMergePrompt,
   buildGitActionProgressStages,
   buildMenuItems,
   type GitActionIconName,
@@ -17,6 +24,7 @@ import {
   type GitQuickAction,
   type DefaultBranchConfirmableAction,
   requiresDefaultBranchConfirmation,
+  resolveAutoMergeAction,
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
   resolveQuickAction,
@@ -47,7 +55,7 @@ import {
   gitRunStackedActionMutationOptions,
 } from "~/lib/gitReactQuery";
 import { refreshGitStatus, useGitStatus } from "~/lib/gitStatusState";
-import { newCommandId, randomUUID } from "~/lib/utils";
+import { newCommandId, newMessageId, randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { readEnvironmentApi } from "~/environmentApi";
@@ -239,6 +247,7 @@ export default function GitActionsControl({
   const [dialogCommitMessage, setDialogCommitMessage] = useState("");
   const [excludedFiles, setExcludedFiles] = useState<ReadonlySet<string>>(new Set());
   const [isEditingFiles, setIsEditingFiles] = useState(false);
+  const [isAutoMergeStarting, setIsAutoMergeStarting] = useState(false);
   const [pendingDefaultBranchAction, setPendingDefaultBranchAction] =
     useState<PendingDefaultBranchAction | null>(null);
   const activeGitActionProgressRef = useRef<ActiveGitActionProgress | null>(null);
@@ -354,6 +363,9 @@ export default function GitActionsControl({
   const isPullRunning =
     useIsMutating({ mutationKey: gitMutationKeys.pull(activeEnvironmentId, gitCwd) }) > 0;
   const isGitActionRunning = isRunStackedActionRunning || isPullRunning;
+  const isThreadTurnRunning =
+    activeServerThread?.session?.status === "running" &&
+    activeServerThread.session.activeTurnId !== undefined;
   const isSelectingWorktreeBase =
     !activeServerThread &&
     activeDraftThread?.envMode === "worktree" &&
@@ -395,8 +407,29 @@ export default function GitActionsControl({
       resolveQuickAction(gitStatusForActions, isGitActionRunning, isDefaultBranch, hasOriginRemote),
     [gitStatusForActions, hasOriginRemote, isDefaultBranch, isGitActionRunning],
   );
+  const autoMergeAction = useMemo(
+    () =>
+      resolveAutoMergeAction({
+        hasServerThread: !!activeServerThread,
+        worktreePath: activeServerThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
+        gitStatus: gitStatusForActions,
+        isBusy: isGitActionRunning || isAutoMergeStarting,
+        isTurnRunning: isThreadTurnRunning,
+      }),
+    [
+      activeDraftThread?.worktreePath,
+      activeServerThread,
+      gitStatusForActions,
+      isAutoMergeStarting,
+      isGitActionRunning,
+      isThreadTurnRunning,
+    ],
+  );
   const quickActionDisabledReason = quickAction.disabled
     ? (quickAction.hint ?? "This action is currently unavailable.")
+    : null;
+  const autoMergeDisabledReason = autoMergeAction?.disabled
+    ? (autoMergeAction.hint ?? "This action is currently unavailable.")
     : null;
   const pendingDefaultBranchActionCopy = pendingDefaultBranchAction
     ? resolveDefaultBranchActionDialogCopy({
@@ -482,6 +515,83 @@ export default function GitActionsControl({
       });
     });
   }, [gitStatusForActions, threadToastData]);
+
+  const startAutoMerge = useEffectEvent(async () => {
+    if (!activeThreadRef || !activeServerThread) {
+      return;
+    }
+
+    const api = readEnvironmentApi(activeThreadRef.environmentId);
+    if (!api) {
+      toastManager.add({
+        type: "error",
+        title: "Auto merge is unavailable.",
+        description: "Thread orchestration is unavailable for this environment.",
+        data: threadToastData,
+      });
+      return;
+    }
+
+    const sourceBranch = gitStatusForActions?.branch ?? activeServerThread.branch;
+    const worktreePath = activeServerThread.worktreePath;
+    if (!sourceBranch || !worktreePath) {
+      toastManager.add({
+        type: "error",
+        title: "Auto merge is unavailable.",
+        description: "This action requires a worktree thread on a checked-out branch.",
+        data: threadToastData,
+      });
+      return;
+    }
+
+    const createdAt = new Date().toISOString();
+    setIsAutoMergeStarting(true);
+
+    try {
+      if (activeServerThread.interactionMode !== "default") {
+        await api.orchestration.dispatchCommand({
+          type: "thread.interaction-mode.set",
+          commandId: newCommandId(),
+          threadId: activeServerThread.id,
+          interactionMode: "default",
+          createdAt,
+        });
+
+        if (activeDraftThread?.interactionMode !== "default") {
+          setDraftThreadContext(draftId ?? activeThreadRef, { interactionMode: "default" });
+        }
+      }
+
+      await api.orchestration.dispatchCommand({
+        type: "thread.turn.start",
+        commandId: newCommandId(),
+        threadId: activeServerThread.id,
+        message: {
+          messageId: newMessageId(),
+          role: "user",
+          text: buildAutoMergePrompt({
+            branch: sourceBranch,
+            worktreePath,
+          }),
+          attachments: [],
+        },
+        modelSelection: activeServerThread.modelSelection,
+        titleSeed: activeServerThread.title,
+        runtimeMode: activeServerThread.runtimeMode,
+        interactionMode: "default",
+        createdAt,
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Failed to start auto merge",
+        description: error instanceof Error ? error.message : "An error occurred.",
+        data: threadToastData,
+      });
+    } finally {
+      setIsAutoMergeStarting(false);
+    }
+  });
 
   runGitActionWithToast = useEffectEvent(
     async ({
@@ -857,120 +967,148 @@ export default function GitActionsControl({
           {initMutation.isPending ? "Initializing..." : "Initialize Git"}
         </Button>
       ) : (
-        <Group aria-label="Git actions" className="shrink-0">
-          {quickActionDisabledReason ? (
+        <div className="flex shrink-0 items-center gap-2">
+          {autoMergeDisabledReason ? (
             <Popover>
               <PopoverTrigger
                 openOnHover
                 render={
                   <Button
                     aria-disabled="true"
-                    className="cursor-not-allowed rounded-e-none border-e-0 opacity-64 before:rounded-e-none"
+                    className="cursor-not-allowed opacity-64"
                     size="xs"
                     variant="outline"
                   />
                 }
               >
+                <GitMergeIcon className="size-3.5" />
+                {autoMergeAction.label}
+              </PopoverTrigger>
+              <PopoverPopup tooltipStyle side="bottom" align="start">
+                {autoMergeDisabledReason}
+              </PopoverPopup>
+            </Popover>
+          ) : (
+            <Button variant="outline" size="xs" onClick={() => void startAutoMerge()}>
+              <GitMergeIcon className="size-3.5" />
+              {autoMergeAction.label}
+            </Button>
+          )}
+          <Group aria-label="Git actions" className="shrink-0">
+            {quickActionDisabledReason ? (
+              <Popover>
+                <PopoverTrigger
+                  openOnHover
+                  render={
+                    <Button
+                      aria-disabled="true"
+                      className="cursor-not-allowed rounded-e-none border-e-0 opacity-64 before:rounded-e-none"
+                      size="xs"
+                      variant="outline"
+                    />
+                  }
+                >
+                  <GitQuickActionIcon quickAction={quickAction} />
+                  <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
+                    {quickAction.label}
+                  </span>
+                </PopoverTrigger>
+                <PopoverPopup tooltipStyle side="bottom" align="start">
+                  {quickActionDisabledReason}
+                </PopoverPopup>
+              </Popover>
+            ) : (
+              <Button
+                variant="outline"
+                size="xs"
+                disabled={isGitActionRunning || quickAction.disabled}
+                onClick={runQuickAction}
+              >
                 <GitQuickActionIcon quickAction={quickAction} />
                 <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
                   {quickAction.label}
                 </span>
-              </PopoverTrigger>
-              <PopoverPopup tooltipStyle side="bottom" align="start">
-                {quickActionDisabledReason}
-              </PopoverPopup>
-            </Popover>
-          ) : (
-            <Button
-              variant="outline"
-              size="xs"
-              disabled={isGitActionRunning || quickAction.disabled}
-              onClick={runQuickAction}
-            >
-              <GitQuickActionIcon quickAction={quickAction} />
-              <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
-                {quickAction.label}
-              </span>
-            </Button>
-          )}
-          <GroupSeparator className="hidden @3xl/header-actions:block" />
-          <Menu
-            onOpenChange={(open) => {
-              if (open) {
-                void refreshGitStatus({
-                  environmentId: activeEnvironmentId,
-                  cwd: gitCwd,
-                }).catch(() => undefined);
-              }
-            }}
-          >
-            <MenuTrigger
-              render={<Button aria-label="Git action options" size="icon-xs" variant="outline" />}
-              disabled={isGitActionRunning}
-            >
-              <ChevronDownIcon aria-hidden="true" className="size-4" />
-            </MenuTrigger>
-            <MenuPopup align="end" className="w-full">
-              {gitActionMenuItems.map((item) => {
-                const disabledReason = getMenuActionDisabledReason({
-                  item,
-                  gitStatus: gitStatusForActions,
-                  isBusy: isGitActionRunning,
-                  hasOriginRemote,
-                });
-                if (item.disabled && disabledReason) {
-                  return (
-                    <Popover key={`${item.id}-${item.label}`}>
-                      <PopoverTrigger
-                        openOnHover
-                        nativeButton={false}
-                        render={<span className="block w-max cursor-not-allowed" />}
-                      >
-                        <MenuItem className="w-full" disabled>
-                          <GitActionItemIcon icon={item.icon} />
-                          {item.label}
-                        </MenuItem>
-                      </PopoverTrigger>
-                      <PopoverPopup tooltipStyle side="left" align="center">
-                        {disabledReason}
-                      </PopoverPopup>
-                    </Popover>
-                  );
+              </Button>
+            )}
+            <GroupSeparator className="hidden @3xl/header-actions:block" />
+            <Menu
+              onOpenChange={(open) => {
+                if (open) {
+                  void refreshGitStatus({
+                    environmentId: activeEnvironmentId,
+                    cwd: gitCwd,
+                  }).catch(() => undefined);
                 }
+              }}
+            >
+              <MenuTrigger
+                render={<Button aria-label="Git action options" size="icon-xs" variant="outline" />}
+                disabled={isGitActionRunning}
+              >
+                <ChevronDownIcon aria-hidden="true" className="size-4" />
+              </MenuTrigger>
+              <MenuPopup align="end" className="w-full">
+                {gitActionMenuItems.map((item) => {
+                  const disabledReason = getMenuActionDisabledReason({
+                    item,
+                    gitStatus: gitStatusForActions,
+                    isBusy: isGitActionRunning,
+                    hasOriginRemote,
+                  });
+                  if (item.disabled && disabledReason) {
+                    return (
+                      <Popover key={`${item.id}-${item.label}`}>
+                        <PopoverTrigger
+                          openOnHover
+                          nativeButton={false}
+                          render={<span className="block w-max cursor-not-allowed" />}
+                        >
+                          <MenuItem className="w-full" disabled>
+                            <GitActionItemIcon icon={item.icon} />
+                            {item.label}
+                          </MenuItem>
+                        </PopoverTrigger>
+                        <PopoverPopup tooltipStyle side="left" align="center">
+                          {disabledReason}
+                        </PopoverPopup>
+                      </Popover>
+                    );
+                  }
 
-                return (
-                  <MenuItem
-                    key={`${item.id}-${item.label}`}
-                    disabled={item.disabled}
-                    onClick={() => {
-                      openDialogForMenuItem(item);
-                    }}
-                  >
-                    <GitActionItemIcon icon={item.icon} />
-                    {item.label}
-                  </MenuItem>
-                );
-              })}
-              {gitStatusForActions?.branch === null && (
-                <p className="px-2 py-1.5 text-xs text-warning">
-                  Detached HEAD: create and checkout a branch to enable push and PR actions.
-                </p>
-              )}
-              {gitStatusForActions &&
-                gitStatusForActions.branch !== null &&
-                !gitStatusForActions.hasWorkingTreeChanges &&
-                gitStatusForActions.behindCount > 0 &&
-                gitStatusForActions.aheadCount === 0 && (
+                  return (
+                    <MenuItem
+                      key={`${item.id}-${item.label}`}
+                      disabled={item.disabled}
+                      onClick={() => {
+                        openDialogForMenuItem(item);
+                      }}
+                    >
+                      <GitActionItemIcon icon={item.icon} />
+                      {item.label}
+                    </MenuItem>
+                  );
+                })}
+                {gitStatusForActions?.branch === null && (
                   <p className="px-2 py-1.5 text-xs text-warning">
-                    Behind upstream. Pull/rebase first.
+                    Detached HEAD: create and checkout a branch to enable push and PR actions.
                   </p>
                 )}
-              {gitStatusError && (
-                <p className="px-2 py-1.5 text-xs text-destructive">{gitStatusError.message}</p>
-              )}
-            </MenuPopup>
-          </Menu>
-        </Group>
+                {gitStatusForActions &&
+                  gitStatusForActions.branch !== null &&
+                  !gitStatusForActions.hasWorkingTreeChanges &&
+                  gitStatusForActions.behindCount > 0 &&
+                  gitStatusForActions.aheadCount === 0 && (
+                    <p className="px-2 py-1.5 text-xs text-warning">
+                      Behind upstream. Pull/rebase first.
+                    </p>
+                  )}
+                {gitStatusError && (
+                  <p className="px-2 py-1.5 text-xs text-destructive">{gitStatusError.message}</p>
+                )}
+              </MenuPopup>
+            </Menu>
+          </Group>
+        </div>
       )}
 
       <Dialog

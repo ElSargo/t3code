@@ -1,9 +1,11 @@
 import type { GitStatusResult } from "@t3tools/contracts";
-import { assert, describe, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
+  buildAutoMergePrompt,
   buildGitActionProgressStages,
   buildMenuItems,
   requiresDefaultBranchConfirmation,
+  resolveAutoMergeAction,
   resolveAutoFeatureBranchName,
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
@@ -147,6 +149,101 @@ describe("when: git status is unavailable", () => {
   it("buildMenuItems returns no menu items", () => {
     const items = buildMenuItems(null, false);
     assert.deepEqual(items, []);
+  });
+});
+
+describe("resolveAutoMergeAction", () => {
+  it("hides the action for non-worktree threads", () => {
+    expect(
+      resolveAutoMergeAction({
+        hasServerThread: true,
+        worktreePath: null,
+        gitStatus: status(),
+        isBusy: false,
+        isTurnRunning: false,
+      }),
+    ).toEqual({
+      label: "Auto merge",
+      disabled: true,
+      hint: "Available for worktree threads only.",
+    });
+  });
+
+  it("disables the action when no server thread exists yet", () => {
+    expect(
+      resolveAutoMergeAction({
+        hasServerThread: false,
+        worktreePath: "/repo/.t3/worktrees/feature-a",
+        gitStatus: status(),
+        isBusy: false,
+        isTurnRunning: false,
+      }),
+    ).toEqual({
+      label: "Auto merge",
+      disabled: true,
+      hint: "Start the thread before running auto merge.",
+    });
+  });
+
+  it("disables the action while a turn is already running", () => {
+    expect(
+      resolveAutoMergeAction({
+        hasServerThread: true,
+        worktreePath: "/repo/.t3/worktrees/feature-a",
+        gitStatus: status(),
+        isBusy: false,
+        isTurnRunning: true,
+      }),
+    ).toEqual({
+      label: "Auto merge",
+      disabled: true,
+      hint: "Wait for the current turn to finish.",
+    });
+  });
+
+  it("disables the action on the default branch", () => {
+    expect(
+      resolveAutoMergeAction({
+        hasServerThread: true,
+        worktreePath: "/repo/.t3/worktrees/main",
+        gitStatus: status({ isDefaultBranch: true }),
+        isBusy: false,
+        isTurnRunning: false,
+      }),
+    ).toEqual({
+      label: "Auto merge",
+      disabled: true,
+      hint: "This worktree is already on the default branch.",
+    });
+  });
+
+  it("enables the action for a worktree feature branch", () => {
+    expect(
+      resolveAutoMergeAction({
+        hasServerThread: true,
+        worktreePath: "/repo/.t3/worktrees/feature-a",
+        gitStatus: status(),
+        isBusy: false,
+        isTurnRunning: false,
+      }),
+    ).toEqual({
+      label: "Auto merge",
+      disabled: false,
+    });
+  });
+});
+
+describe("buildAutoMergePrompt", () => {
+  it("includes the worktree branch, path, and validation guidance", () => {
+    const prompt = buildAutoMergePrompt({
+      branch: "feature/auto-merge",
+      worktreePath: "/repo/.t3/worktrees/feature-auto-merge",
+    });
+
+    expect(prompt).toContain('branch "feature/auto-merge"');
+    expect(prompt).toContain('worktree "/repo/.t3/worktrees/feature-auto-merge"');
+    expect(prompt).toContain("git worktree list --porcelain");
+    expect(prompt).toContain("Run the relevant tests or validation commands");
   });
 });
 

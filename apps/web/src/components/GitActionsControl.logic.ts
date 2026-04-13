@@ -25,6 +25,12 @@ export interface GitQuickAction {
   hint?: string;
 }
 
+export interface GitAutoMergeAction {
+  label: string;
+  disabled: boolean;
+  hint?: string;
+}
+
 export interface DefaultBranchActionDialogCopy {
   title: string;
   description: string;
@@ -36,6 +42,100 @@ export type DefaultBranchConfirmableAction =
   | "create_pr"
   | "commit_push"
   | "commit_push_pr";
+
+export function resolveAutoMergeAction(input: {
+  hasServerThread: boolean;
+  worktreePath: string | null;
+  gitStatus: GitStatusResult | null;
+  isBusy: boolean;
+  isTurnRunning: boolean;
+}): GitAutoMergeAction {
+  if (!input.worktreePath) {
+    return {
+      label: "Auto merge",
+      disabled: true,
+      hint: "Available for worktree threads only.",
+    };
+  }
+
+  if (!input.hasServerThread) {
+    return {
+      label: "Auto merge",
+      disabled: true,
+      hint: "Start the thread before running auto merge.",
+    };
+  }
+
+  if (input.isBusy) {
+    return {
+      label: "Auto merge",
+      disabled: true,
+      hint: "Git action in progress.",
+    };
+  }
+
+  if (input.isTurnRunning) {
+    return {
+      label: "Auto merge",
+      disabled: true,
+      hint: "Wait for the current turn to finish.",
+    };
+  }
+
+  if (!input.gitStatus) {
+    return {
+      label: "Auto merge",
+      disabled: true,
+      hint: "Git status is unavailable.",
+    };
+  }
+
+  if (input.gitStatus.branch === null) {
+    return {
+      label: "Auto merge",
+      disabled: true,
+      hint: "Detached HEAD: checkout a branch before auto-merging.",
+    };
+  }
+
+  if (input.gitStatus.isDefaultBranch) {
+    return {
+      label: "Auto merge",
+      disabled: true,
+      hint: "This worktree is already on the default branch.",
+    };
+  }
+
+  return {
+    label: "Auto merge",
+    disabled: false,
+  };
+}
+
+export function buildAutoMergePrompt(input: { branch: string; worktreePath: string }): string {
+  return [
+    "Auto-merge this worktree into the project's default local branch.",
+    "Do the work now. Do not stop at a plan.",
+    "",
+    "Follow this process:",
+    `1. Treat branch "${input.branch}" in worktree "${input.worktreePath}" as the source.`,
+    "2. Inspect git status in the worktree. If there are uncommitted changes, create a commit for them first.",
+    "3. Determine the repository's default local branch. Prefer the branch pointed to by origin/HEAD when available.",
+    "4. Find the primary repository checkout with `git worktree list --porcelain` and use that checkout for the target-branch merge.",
+    `5. Merge "${input.branch}" into the default branch locally. Do not push.`,
+    "6. If merge conflicts happen, resolve them yourself, stage the resolutions, and complete the merge commit.",
+    "7. Run the relevant tests or validation commands for the merged change before finishing.",
+    "8. If validation fails because of the merge, fix it and rerun. If it fails for unrelated reasons, report that clearly.",
+    "9. Do not delete the worktree or branch automatically.",
+    "",
+    "In your final response include:",
+    "- the source branch and target branch",
+    "- any commit(s) you created",
+    "- whether you resolved merge conflicts",
+    "- the validation results",
+    "- whether the worktree is ready for cleanup",
+  ].join("\n");
+}
 
 export function buildGitActionProgressStages(input: {
   action: GitStackedAction;

@@ -1,6 +1,7 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
 import type { ServerProviderSkill } from "@t3tools/contracts";
+import { deprioritizeChildProcess } from "../os-jank";
 import { readCodexAccountSnapshot, type CodexAccountSnapshot } from "./codexAccount";
 
 interface JsonRpcProbeResponse {
@@ -120,6 +121,7 @@ export async function probeCodexDiscovery(input: {
       stdio: ["pipe", "pipe", "pipe"],
       shell: process.platform === "win32",
     });
+    deprioritizeChildProcess(child.pid);
     const output = readline.createInterface({ input: child.stdout });
 
     let completed = false;

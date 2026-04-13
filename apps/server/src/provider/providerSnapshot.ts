@@ -10,6 +10,7 @@ import type {
 import { Effect, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { normalizeModelSlug } from "@t3tools/shared/model";
+import { deprioritizeChildProcess } from "../os-jank";
 import { isWindowsCommandNotFound } from "../processRunner";
 
 export const DEFAULT_TIMEOUT_MS = 4_000;
@@ -43,6 +44,7 @@ export const spawnAndCollect = (binaryPath: string, command: ChildProcess.Comman
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const child = yield* spawner.spawn(command);
+    deprioritizeChildProcess(Number(child.pid));
     const [stdout, stderr, exitCode] = yield* Effect.all(
       [
         collectStreamAsString(child.stdout),

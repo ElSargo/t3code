@@ -32,6 +32,7 @@ import {
   type CodexAccountSnapshot,
 } from "./provider/codexAccount";
 import { buildCodexInitializeParams, killCodexChildProcess } from "./provider/codexAppServer";
+import { deprioritizeChildProcess } from "./os-jank";
 
 export { buildCodexInitializeParams } from "./provider/codexAppServer";
 export { readCodexAccountSnapshot, resolveCodexModelForAccount } from "./provider/codexAccount";
@@ -479,6 +480,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         stdio: ["pipe", "pipe", "pipe"],
         shell: process.platform === "win32",
       });
+      deprioritizeChildProcess(child.pid);
       const output = readline.createInterface({ input: child.stdout });
 
       context = {

@@ -8,6 +8,7 @@ import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shar
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { deprioritizeChildProcess } from "../../os-jank.ts";
 import { TextGenerationError } from "@t3tools/contracts";
 import {
   type BranchNameGenerationInput,
@@ -200,6 +201,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
             normalizeCliError("codex", operation, cause, "Failed to spawn Codex CLI process"),
           ),
         );
+      deprioritizeChildProcess(Number(child.pid));
 
       const [stdout, stderr, exitCode] = yield* Effect.all(
         [

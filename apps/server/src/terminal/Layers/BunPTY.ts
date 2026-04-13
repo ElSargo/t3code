@@ -1,4 +1,5 @@
 import { Effect, Layer } from "effect";
+import { deprioritizeChildProcess } from "../../os-jank";
 import { PtyAdapter, PtyAdapterShape, PtyExitEvent, PtyProcess } from "../Services/PTY";
 
 class BunPtyProcess implements PtyProcess {
@@ -110,6 +111,7 @@ export const layer = Layer.effect(
               },
             },
           });
+          deprioritizeChildProcess(subprocess.pid);
           processHandle = new BunPtyProcess(subprocess);
           return processHandle;
         }),

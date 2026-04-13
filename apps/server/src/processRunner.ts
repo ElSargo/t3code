@@ -1,4 +1,5 @@
 import { type ChildProcess as ChildProcessHandle, spawn, spawnSync } from "node:child_process";
+import { deprioritizeChildProcess } from "./os-jank";
 
 export interface ProcessRunOptions {
   cwd?: string | undefined;
@@ -141,6 +142,7 @@ export async function runProcess(
       stdio: "pipe",
       shell: process.platform === "win32",
     });
+    deprioritizeChildProcess(child.pid);
 
     let stdout = "";
     let stderr = "";

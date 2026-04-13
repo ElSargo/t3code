@@ -23,8 +23,11 @@ function createDeferredPromise<T>() {
 }
 
 const {
+  activeInteractionModeRef,
   activeRunStackedActionDeferredRef,
   activeDraftThreadRef,
+  activeWorktreePathRef,
+  dispatchCommandSpy,
   hasServerThreadRef,
   invalidateGitQueriesSpy,
   refreshGitStatusSpy,
@@ -36,8 +39,11 @@ const {
   toastPromiseSpy,
   toastUpdateSpy,
 } = vi.hoisted(() => ({
+  activeInteractionModeRef: { current: "default" as "default" | "plan" },
   activeRunStackedActionDeferredRef: { current: createDeferredPromise<never>() },
   activeDraftThreadRef: { current: null as unknown },
+  activeWorktreePathRef: { current: null as string | null },
+  dispatchCommandSpy: vi.fn(() => Promise.resolve()),
   hasServerThreadRef: { current: true },
   invalidateGitQueriesSpy: vi.fn(() => Promise.resolve()),
   refreshGitStatusSpy: vi.fn(() => Promise.resolve(null)),
@@ -132,6 +138,14 @@ vi.mock("~/localApi", () => ({
   readLocalApi: vi.fn(() => null),
 }));
 
+vi.mock("~/environmentApi", () => ({
+  readEnvironmentApi: vi.fn(() => ({
+    orchestration: {
+      dispatchCommand: dispatchCommandSpy,
+    },
+  })),
+}));
+
 vi.mock("~/composerDraftStore", async () => {
   const draftStoreState = {
     getDraftThreadByRef: () => activeDraftThreadRef.current,
@@ -198,8 +212,18 @@ vi.mock("~/store", () => ({
             ? {
                 [SHARED_THREAD_ID]: {
                   id: SHARED_THREAD_ID,
+                  projectId: "project-a",
+                  environmentId: ENVIRONMENT_A,
+                  codexThreadId: null,
+                  title: "Shared thread",
+                  modelSelection: { provider: "codex", model: "gpt-5.4" },
+                  runtimeMode: "full-access",
+                  interactionMode: activeInteractionModeRef.current,
+                  error: null,
+                  createdAt: "2026-04-10T10:00:00.000Z",
+                  archivedAt: null,
                   branch: BRANCH_NAME,
-                  worktreePath: null,
+                  worktreePath: activeWorktreePathRef.current,
                 },
               }
             : {},
@@ -219,8 +243,18 @@ vi.mock("~/store", () => ({
             ? {
                 [SHARED_THREAD_ID]: {
                   id: SHARED_THREAD_ID,
+                  projectId: "project-b",
+                  environmentId: ENVIRONMENT_B,
+                  codexThreadId: null,
+                  title: "Shared thread",
+                  modelSelection: { provider: "codex", model: "gpt-5.4" },
+                  runtimeMode: "full-access",
+                  interactionMode: activeInteractionModeRef.current,
+                  error: null,
+                  createdAt: "2026-04-10T10:00:00.000Z",
+                  archivedAt: null,
                   branch: BRANCH_NAME,
-                  worktreePath: null,
+                  worktreePath: activeWorktreePathRef.current,
                 },
               }
             : {},
@@ -273,8 +307,10 @@ describe("GitActionsControl thread-scoped progress toast", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    activeInteractionModeRef.current = "default";
     activeRunStackedActionDeferredRef.current = createDeferredPromise<never>();
     activeDraftThreadRef.current = null;
+    activeWorktreePathRef.current = null;
     hasServerThreadRef.current = true;
     document.body.innerHTML = "";
   });
@@ -454,6 +490,75 @@ describe("GitActionsControl thread-scoped progress toast", () => {
 
       expect(setDraftThreadContextSpy).not.toHaveBeenCalled();
       expect(setThreadBranchSpy).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("starts auto merge on a worktree thread and switches plan mode back to default first", async () => {
+    activeWorktreePathRef.current = "/repo/.t3/worktrees/feature-auto-merge";
+    activeInteractionModeRef.current = "plan";
+    activeDraftThreadRef.current = {
+      threadId: SHARED_THREAD_ID,
+      environmentId: ENVIRONMENT_A,
+      interactionMode: "plan",
+      branch: BRANCH_NAME,
+      worktreePath: activeWorktreePathRef.current,
+    };
+
+    const host = document.createElement("div");
+    document.body.append(host);
+    const screen = await render(
+      <GitActionsControl
+        gitCwd={GIT_CWD}
+        activeThreadRef={scopeThreadRef(ENVIRONMENT_A, SHARED_THREAD_ID)}
+      />,
+      {
+        container: host,
+      },
+    );
+
+    try {
+      const autoMergeButton = findButtonByText("Auto merge");
+      expect(autoMergeButton, 'Unable to find button containing "Auto merge"').toBeTruthy();
+      if (!(autoMergeButton instanceof HTMLButtonElement)) {
+        throw new Error('Unable to find button containing "Auto merge"');
+      }
+
+      autoMergeButton.click();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(dispatchCommandSpy).toHaveBeenCalledTimes(2);
+      expect(dispatchCommandSpy).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          type: "thread.interaction-mode.set",
+          threadId: SHARED_THREAD_ID,
+          interactionMode: "default",
+        }),
+      );
+      expect(dispatchCommandSpy).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          type: "thread.turn.start",
+          threadId: SHARED_THREAD_ID,
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          message: expect.objectContaining({
+            role: "user",
+            attachments: [],
+            text: expect.stringContaining(
+              'Merge "feature/toast-scope" into the default branch locally.',
+            ),
+          }),
+        }),
+      );
+      expect(setDraftThreadContextSpy).toHaveBeenCalledWith(
+        scopeThreadRef(ENVIRONMENT_A, SHARED_THREAD_ID),
+        { interactionMode: "default" },
+      );
     } finally {
       await screen.unmount();
       host.remove();
